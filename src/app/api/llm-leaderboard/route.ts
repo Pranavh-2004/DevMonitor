@@ -132,7 +132,6 @@ async function fetchArenaLeaderboards(): Promise<Record<string, CategoryData>> {
 
     if (!res.ok) throw new Error(`Jina reader returned ${res.status}`);
     const text = await res.text();
-    require("fs").writeFileSync("jina-live.txt", text);
 
     const categories: Record<string, CategoryData> = {};
     for (const cat of CATEGORIES) {
