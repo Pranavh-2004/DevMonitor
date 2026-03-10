@@ -73,7 +73,7 @@ export default function LLMLeaderboard() {
 
     const { data, loading, error, lastUpdated, refresh } =
         useFetch<LeaderboardResponse>("/api/llm-leaderboard", {
-            cacheKey: "llm-leaderboard",
+            cacheKey: "llm-leaderboard-v2",
             refreshInterval: 30 * 60 * 1000, // 30 min
         });
 
