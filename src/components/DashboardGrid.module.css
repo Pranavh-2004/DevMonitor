@@ -8,11 +8,14 @@
 .cell {
   position: relative;
   height: 100%;
-  transition: transform 0.2s ease, opacity 0.2s ease;
+  transition: transform 0.2s ease, opacity 0.2s ease, grid-column 0.3s ease, grid-row 0.3s ease;
   border-radius: var(--card-radius);
+  /* Apply computed sizes, bounded by max available columns if necessary */
+  grid-column: span var(--w, 1);
+  grid-row: span var(--h, 1);
 }
 
-.cell:hover .dragHandle {
+.cell:hover .dragHandle, .cell:hover .resizeHandle {
   opacity: 1;
 }
 
@@ -47,6 +50,49 @@
 .dragHandle:active {
   cursor: grabbing;
 }
+
+/* ---- Resize handle overlay ---- */
+.resizeHandle {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  opacity: 0;
+  cursor: se-resize;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  pointer-events: all;
+  touch-action: none; /* Prevent scrolling on touch devices while drag-resizing */
+}
+
+.resizeHandle:hover {
+  color: var(--text-primary);
+  background: var(--bg-input);
+}
+
+.resizeHandle:active {
+  color: var(--accent-blue);
+}
+
+/* Optional styling when a specific grid cell is resizing */
+.isResizing {
+  z-index: 20;
+  transition: none; /* Instant pixel snapping */
+  box-shadow: 0 0 0 2px var(--accent-blue);
+}
+
+.isResizing .resizeHandle {
+  opacity: 1;
+  color: var(--accent-blue);
+}
+
+
 
 /* ---- Dragging state ---- */
 .dragging {
@@ -89,4 +135,17 @@
 .emptyHint {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+/* Ensure widgets respect min mobile bounds */
+@media (max-width: 1400px) {
+  .cell { grid-column: span min(var(--w, 1), 3); }
+}
+
+@media (max-width: 1000px) {
+  .cell { grid-column: span min(var(--w, 1), 2); }
+}
+
+@media (max-width: 640px) {
+  .cell { grid-column: span min(var(--w, 1), 1); }
 }
