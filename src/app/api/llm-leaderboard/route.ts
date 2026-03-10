@@ -56,31 +56,34 @@ const CATEGORIES = [
 
 // Parse a single category block from the markdown
 function parseCategoryBlock(text: string, mdLabel: string, slug: string): { models: LeaderboardModel[]; updated: string } {
-    // Each category block looks like:
-    // [Text ---- 1 day ago View | Rank | ... | [View all](https://lmarena.ai/leaderboard/text) |](url)
-    // or [Text-to-Image ---- 2 days ago View | ... |](url)
     const escapedLabel = mdLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const blockRegex = new RegExp(
-        "\\[" + escapedLabel + "\\s*-+([\\s\\S]*?)View all\\]\\(https:\\/\\/lmarena\\.ai\\/leaderboard\\/" + slug + "\\)\\s*\\|?\\]"
+
+    // Find section starting with the exact label up to "View all"
+    const sectionRegex = new RegExp(
+        escapedLabel + "\\n(\\d+\\s*(?:day|hour|minute|week)s?\\s*ago)\\nView[\\s\\S]*?(?=View all|\\Z)",
+        "i"
     );
-    const blockMatch = text.match(blockRegex);
-    if (!blockMatch) return { models: [], updated: "" };
 
-    const block = blockMatch[0];
+    const match = text.match(sectionRegex);
+    if (!match) return { models: [], updated: "" };
 
-    // Extract the "X days ago" part
-    const updatedMatch = block.match(/(\d+\s*(?:day|hour|minute|week)s?\s*ago)/i);
-    const updated = updatedMatch ? updatedMatch[1] : "";
+    const block = match[0];
+    const updated = match[1];
 
     const models: LeaderboardModel[] = [];
-    const rowRegex = /\|\s*(\d{1,2})\s*\|\s*(?:!\[.*?\]\([^)]*\)\s*)?(?:\[([^\]]+)\]\([^)]*\))\s*\|\s*(\d{3,4})\s*\|\s*([\d,]+)\s*\|/g;
 
-    let match;
-    while ((match = rowRegex.exec(block)) !== null && models.length < 10) {
-        const rank = parseInt(match[1]);
-        const name = match[2];
-        const score = parseInt(match[3]);
-        const votes = parseInt(match[4].replace(/,/g, ""));
+    // Look for lines that look like:
+    // [Rank (1-2 digits)]
+    // [Model Name]
+    // [Tab][Score][Tab][Votes]
+    const rowRegex = /^(\d{1,2})\s*\n([^\n]+)\n\s*(\d{3,4})\s+([\d,]+)/gm;
+    let rowMatch;
+
+    while ((rowMatch = rowRegex.exec(block)) !== null && models.length < 10) {
+        const rank = parseInt(rowMatch[1], 10);
+        const name = rowMatch[2].trim();
+        const score = parseInt(rowMatch[3], 10);
+        const votes = parseInt(rowMatch[4].replace(/,/g, ''), 10);
 
         if (name && score > 1000 && score < 2000) {
             models.push({
