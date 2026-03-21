@@ -54,15 +54,22 @@ const CATEGORIES = [
     { key: "search", label: "Search", mdLabel: "Search", slug: "search" },
     { key: "text-to-video", label: "Txt→Vid", mdLabel: "Text-to-Video", slug: "text-to-video" },
     { key: "image-to-video", label: "Img→Vid", mdLabel: "Image-to-Video", slug: "image-to-video" },
+    { key: "video-edit", label: "Vid Edit", mdLabel: "Video Edit", slug: "video-edit" },
 ];
 
 // Parse a single category block from the markdown
 function parseCategoryBlock(text: string, mdLabel: string, slug: string): { models: LeaderboardModel[]; updated: string } {
     const escapedLabel = mdLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    
+
     // Extract the entire block until "View all"
-    // Handle both "[Text ---- 3 days ago ... View all]" and "Text\n3 days ago\n..."
-    const blockRegex = new RegExp("(\\[" + escapedLabel + "\\s*-+|" + escapedLabel + "\\s*\\r?\\n)[\\s\\S]*?(?=View all|\\Z)", "i");
+    // Handle formats:
+    //   "[## Text 17 hours ago View | Rank | ..."  (current)
+    //   "[Text ---- 3 days ago ... View all]"       (legacy)
+    //   "Text\n3 days ago\n..."                     (legacy)
+    const blockRegex = new RegExp(
+        "(\\[##\\s+" + escapedLabel + "\\s|\\[" + escapedLabel + "\\s*-+|" + escapedLabel + "\\s*\\r?\\n)[\\s\\S]*?(?=View all|\\Z)",
+        "i"
+    );
     const match = text.match(blockRegex);
 
     if (!match) return { models: [], updated: "" };
