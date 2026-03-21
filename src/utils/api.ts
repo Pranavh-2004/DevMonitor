@@ -29,6 +29,7 @@ export const ENDPOINTS = {
   LLM_STATUS: "/api/llm-status",
   LLM_LEADERBOARD: "/api/llm-leaderboard",
   DEV_RELEASES: "/api/dev-releases",
+  CVE_FEED: "/api/cve-feed",
 } as const;
 
 export const LANG_COLORS: Record<string, string> = {

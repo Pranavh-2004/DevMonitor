@@ -74,6 +74,13 @@ const registry: WidgetDef[] = [
     defaultEnabled: false,
     component: dynamic(() => import("./widgets/DevToolsReleases")),
   },
+  {
+    id: "cve-feed",
+    label: "CVE Feed",
+    accentColor: "var(--accent-red)",
+    defaultEnabled: false,
+    component: dynamic(() => import("./widgets/CVEFeed")),
+  },
 ];
 
 export default registry;
