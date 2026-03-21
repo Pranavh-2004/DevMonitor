@@ -102,6 +102,12 @@ function parseAnthropicNews(html: string): FeedItem[] {
     }
   }
 
+  items.sort((a, b) => {
+    const da = a.pubDate ? new Date(a.pubDate).getTime() : 0;
+    const db = b.pubDate ? new Date(b.pubDate).getTime() : 0;
+    return db - da;
+  });
+
   return items.slice(0, 10);
 }
 
