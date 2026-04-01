@@ -17,7 +17,7 @@ Built with **Next.js 16** · **React 19** · **TypeScript** · **Zero external U
 ## ✨ Features
 
 - **🧩 Drag-and-Drop Grid** — Rearrange widgets by dragging. Layout persists in `localStorage`.
-- **🎛️ Widget Picker** — Toggle any of the 9 widgets on/off from the header. Reset to default layout anytime.
+- **🎛️ Widget Picker** — Toggle any of the 10 widgets on/off from the header. Reset to default layout anytime.
 - **📡 Live Data** — All widgets fetch real-time data from public APIs. No API keys required.
 - **🏆 LLM Leaderboard** — Real ELO scores from [LMSYS Chatbot Arena](https://lmarena.ai) across 9 categories (Text, Code, Vision, and more), enriched with live pricing from [OpenRouter](https://openrouter.ai).
 - **🔗 Quick Links** — One-click access to ChatGPT, Gemini, Claude, and Perplexity from the header.
@@ -60,7 +60,7 @@ npm start
 
 ## 🧩 Widgets
 
-DevMonitor ships with **9 widgets** (8 enabled by default):
+DevMonitor ships with **10 widgets** (9 enabled by default):
 
 | Widget | Description | Data Source |
 |--------|-------------|-------------|
@@ -73,6 +73,7 @@ DevMonitor ships with **9 widgets** (8 enabled by default):
 | **OpenAI Updates** | Latest ChatGPT/GPT announcements | OpenAI RSS |
 | **Google AI Updates** | Latest Gemini and Google AI news | Google AI Blog RSS |
 | **Dev Tools Releases** | Latest releases from popular dev tools | GitHub Releases API |
+| **CVE Feed** | Recent security vulnerabilities with severity ratings and CVSS scores | [NIST NVD API](https://nvd.nist.gov/) |
 
 ### LLM Leaderboard Categories
 
@@ -100,6 +101,7 @@ src/
 │   ├── api/                          # Next.js API routes (server-side)
 │   │   ├── anthropic-feed/route.ts   # Anthropic blog RSS
 │   │   ├── arxiv/route.ts            # arXiv paper search
+│   │   ├── cve-feed/route.ts         # NIST NVD CVE data
 │   │   ├── dev-releases/route.ts     # GitHub releases for dev tools
 │   │   ├── google-feed/route.ts      # Google AI blog RSS
 │   │   ├── llm-leaderboard/route.ts  # LMSYS Arena + OpenRouter
@@ -113,6 +115,7 @@ src/
 │   │   ├── ArxivPapers.tsx
 │   │   ├── ChatGPTReleases.tsx
 │   │   ├── ClaudeReleases.tsx
+│   │   ├── CVEFeed.tsx
 │   │   ├── DevToolsReleases.tsx
 │   │   ├── GeminiReleases.tsx
 │   │   ├── GithubTrending.tsx
@@ -153,6 +156,7 @@ All API routes are under `/api/` and require **no API keys**:
 | `/api/anthropic-feed` | GET | Anthropic blog/announcements | anthropic.com RSS |
 | `/api/openai-feed` | GET | OpenAI blog/announcements | openai.com RSS |
 | `/api/google-feed` | GET | Google AI blog/announcements | blog.google RSS |
+| `/api/cve-feed` | GET | Recent CVEs from the past 7 days with CVSS scores and severity | nvd.nist.gov |
 | `/api/dev-releases` | GET | Latest releases of popular dev tools | GitHub API |
 
 ---
