@@ -61,69 +61,41 @@ const CATEGORIES = [
 function parseCategoryBlock(text: string, mdLabel: string, slug: string): { models: LeaderboardModel[]; updated: string } {
     const escapedLabel = mdLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-    // Extract the entire block until "View all"
-    // Handle formats:
-    //   "[## Text 17 hours ago View | Rank | ..."  (current)
-    //   "[Text ---- 3 days ago ... View all]"       (legacy)
-    //   "Text\n3 days ago\n..."                     (legacy)
-    const blockRegex = new RegExp(
-        "(\\[##\\s+" + escapedLabel + "\\s|\\[" + escapedLabel + "\\s*-+|" + escapedLabel + "\\s*\\r?\\n)[\\s\\S]*?(?=View all|\\Z)",
-        "i"
-    );
-    const match = text.match(blockRegex);
+    // Current format (2026-05): entire section is a single-line H2 link:
+    //   ## [Text 2 days ago View | Rank | Model | Score | | --- | --- | --- | | 1 | [name](url) | 1503 | ...](url)
+    // Match the whole line starting with ## [Label
+    const lineRegex = new RegExp(`## \\[${escapedLabel}\\s[^\\n]*`, "i");
+    const match = text.match(lineRegex);
 
     if (!match) return { models: [], updated: "" };
     const block = match[0];
 
     const updatedMatch = block.match(/(\d+\s*(?:day|hour|minute|week)s?\s*ago)/i);
     const updated = updatedMatch ? updatedMatch[1] : "";
-    
+
     const models: LeaderboardModel[] = [];
-    
-    // 1. Try table format: | 1 | [name](url) | 1500 | 9,000 |
-    const tableRowRegex = /\|\s*(\d+)\s*\|\s*(?:!\[.*?\]\([^)]*\)\s*)?(?:\[([^\]]+)\]\([^)]*\)|([^|]+?))\s*\|\s*(\d{3,4})\s*\|\s*([\d,]+)\s*\|/g;
+
+    // Format: | rank | [name](url "title") | score |  (no votes column)
+    // .+? instead of [^\]]+ to handle nested brackets e.g. [web-search] in model names
+    // [^|]* instead of [^)]* to handle parens in URL titles e.g. "gpt-image-2 (medium)"
+    const tableRowRegex = /\|\s*(\d{1,2})\s*\|\s*\[(.+?)\]\([^|]*\)\s*\|\s*(\d{3,4})\s*\|/g;
     let rowMatch;
     while ((rowMatch = tableRowRegex.exec(block)) !== null && models.length < 10) {
         const rank = parseInt(rowMatch[1], 10);
-        const name = (rowMatch[2] || rowMatch[3]).trim();
-        const score = parseInt(rowMatch[4], 10);
-        const votes = parseInt(rowMatch[5].replace(/,/g, ''), 10);
+        const name = rowMatch[2].trim();
+        const score = parseInt(rowMatch[3], 10);
 
-        if (name && score > 1000 && score < 2000) {
+        if (name && score > 1000 && score < 2000 && rank >= 1 && rank <= 10) {
             models.push({
                 rank,
                 name,
                 creator: inferCreator(name),
                 score,
-                votes,
+                votes: 0,
                 context_window: null,
                 input_price: null,
                 output_price: null,
             });
-        }
-    }
-
-    // 2. Try newline format: 1\n name\n 1500 9000
-    if (models.length === 0) {
-        const newlineRowRegex = /^(\d{1,2})\s*\r?\n([^\n]+)\r?\n\s*(\d{3,4})\s+([\d,]+)/gm;
-        while ((rowMatch = newlineRowRegex.exec(block)) !== null && models.length < 10) {
-            const rank = parseInt(rowMatch[1], 10);
-            const name = rowMatch[2].trim();
-            const score = parseInt(rowMatch[3], 10);
-            const votes = parseInt(rowMatch[4].replace(/,/g, ''), 10);
-
-            if (name && score > 1000 && score < 2000) {
-                models.push({
-                    rank,
-                    name,
-                    creator: inferCreator(name),
-                    score,
-                    votes,
-                    context_window: null,
-                    input_price: null,
-                    output_price: null,
-                });
-            }
         }
     }
 

@@ -64,6 +64,7 @@ function formatPrice(price: number | null): string {
 }
 
 function formatVotes(votes: number): string {
+    if (votes === 0) return "—";
     if (votes >= 1000) return `${(votes / 1000).toFixed(1)}k`;
     return votes.toString();
 }
