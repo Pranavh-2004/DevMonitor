@@ -10,7 +10,7 @@ interface LeaderboardModel {
     name: string;
     creator: string;
     score: number;
-    votes: number;
+    ci: number | null;
     context_window: number | null;
     input_price: number | null;
     output_price: number | null;
@@ -18,12 +18,11 @@ interface LeaderboardModel {
 
 interface CategoryData {
     models: LeaderboardModel[];
-    updated: string;
 }
 
 interface LeaderboardResponse {
     categories: Record<string, CategoryData>;
-    categoryOrder: { key: string; label: string }[];
+    categoryOrder: { key: string; label: string; url: string }[];
     source: string;
 }
 
@@ -63,10 +62,9 @@ function formatPrice(price: number | null): string {
     return `$${price.toFixed(1)}`;
 }
 
-function formatVotes(votes: number): string {
-    if (votes === 0) return "—";
-    if (votes >= 1000) return `${(votes / 1000).toFixed(1)}k`;
-    return votes.toString();
+function formatCi(ci: number | null): string {
+    if (ci === null) return "—";
+    return `±${ci}`;
 }
 
 export default function LLMLeaderboard() {
@@ -79,8 +77,13 @@ export default function LLMLeaderboard() {
         });
 
     const categories = data?.categoryOrder || [];
-    const currentData = data?.categories?.[activeCategory];
-    const models = currentData?.models || [];
+    // Arena renames/retires categories periodically, so fall back to the first
+    // one the API actually returned rather than showing an empty card.
+    const currentCategory =
+        categories.find((c) => c.key === activeCategory) || categories[0];
+    const models = currentCategory
+        ? data?.categories?.[currentCategory.key]?.models || []
+        : [];
 
     return (
         <WidgetCard
@@ -123,10 +126,10 @@ export default function LLMLeaderboard() {
                             <button
                                 key={cat.key}
                                 onClick={() => setActiveCategory(cat.key)}
-                                className={`${widgetCardStyles.tab} ${activeCategory === cat.key ? widgetCardStyles.tabActive : ""
+                                className={`${widgetCardStyles.tab} ${currentCategory?.key === cat.key ? widgetCardStyles.tabActive : ""
                                     }`}
                                 style={
-                                    activeCategory === cat.key
+                                    currentCategory?.key === cat.key
                                         ? { color: "var(--accent-purple)" }
                                         : undefined
                                 }
@@ -150,7 +153,7 @@ export default function LLMLeaderboard() {
                         </div>
                         <div style={{ display: "flex", gap: 12, flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
                             <span style={{ width: 36, textAlign: "right" }}>ELO</span>
-                            <span style={{ width: 40, textAlign: "right" }}>Votes</span>
+                            <span style={{ width: 40, textAlign: "right" }}>CI</span>
                             <span style={{ width: 50, textAlign: "right" }}>Price</span>
                         </div>
                     </div>
@@ -158,7 +161,7 @@ export default function LLMLeaderboard() {
                     {models.map((m) => (
                         <a
                             key={`${m.rank}-${m.name}`}
-                            href={`https://lmarena.ai/leaderboard/${activeCategory}`}
+                            href={currentCategory?.url || "https://lmarena.ai/leaderboard"}
                             target="_blank"
                             rel="noopener noreferrer"
                             className={styles.feedItem}
@@ -211,7 +214,7 @@ export default function LLMLeaderboard() {
                                         textAlign: "right",
                                     }}
                                 >
-                                    {formatVotes(m.votes)}
+                                    {formatCi(m.ci)}
                                 </span>
                                 <span
                                     style={{
@@ -228,8 +231,8 @@ export default function LLMLeaderboard() {
                         </a>
                     ))}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 14px 12px", fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-                        <a href="https://lmarena.ai/leaderboard" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent-blue)" }}>LMSYS Chatbot Arena</a>
-                        {currentData?.updated && <span>Updated {currentData.updated}</span>}
+                        <a href="https://lmarena.ai/leaderboard" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent-blue)" }}>LMArena</a>
+                        <span>Prices per 1M output tokens</span>
                     </div>
                 </div>
             ) : (
