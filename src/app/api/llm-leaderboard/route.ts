@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 
-export const dynamic = "force-dynamic";
+// Cache the assembled response for 30 minutes (the dataset is republished ~daily)
+export const revalidate = 1800;
 
 interface LeaderboardModel {
     rank: number;
     name: string;
     creator: string;
-    score: number;      // Arena ELO score
-    ci: number | null;  // +/- confidence interval on the score
+    score: number;       // Arena rating
+    votes: number;
     context_window: number | null;
     input_price: number | null;
     output_price: number | null;
@@ -15,324 +16,199 @@ interface LeaderboardModel {
 
 interface CategoryData {
     models: LeaderboardModel[];
+    updated: string; // e.g. "1 day ago"
 }
 
-interface CategoryMeta {
-    key: string;
-    label: string;
-    url: string;
+interface ArenaRow {
+    model_name: string;
+    organization: string;
+    rating: number;
+    vote_count: number;
+    rank: number;
+    category: string;
+    leaderboard_publish_date: string;
 }
 
-// Infer the creator/company from the model name
-function inferCreator(name: string): string {
-    const n = name.toLowerCase();
-    if (n.includes("claude") || n.includes("sonnet") || n.includes("opus") || n.includes("haiku") || n.includes("fable")) return "Anthropic";
-    if (n.includes("gpt") || n.startsWith("o1") || n.startsWith("o3") || n.startsWith("o4") || n.includes("chatgpt") || n.includes("codex") || n.includes("sora")) return "OpenAI";
-    if (n.includes("gemini") || n.includes("gemma") || n.includes("imagen") || n.includes("veo")) return "Google";
-    if (n.includes("grok")) return "xAI";
-    if (n.includes("deepseek")) return "DeepSeek";
-    if (n.includes("llama") || n.includes("muse-")) return "Meta";
-    if (n.includes("mistral") || n.includes("magistral") || n.includes("flux")) return "Mistral";
-    if (n.includes("qwen") || n.includes("qwq") || n.includes("wan")) return "Alibaba";
-    if (n.includes("command") || n.includes("aya")) return "Cohere";
-    if (n.includes("phi-") || n.includes("mai-")) return "Microsoft";
-    if (n.includes("glm")) return "Zhipu";
-    if (n.includes("ernie")) return "Baidu";
-    if (n.includes("nova-") || n.includes("amazon")) return "Amazon";
-    if (n.includes("kimi")) return "Moonshot";
-    if (n.includes("seed") || n.includes("doubao") || n.includes("dreamina")) return "ByteDance";
-    if (n.includes("minimax")) return "MiniMax";
-    if (n.includes("nemotron") || n.includes("nvidia")) return "NVIDIA";
-    if (n.includes("step-")) return "StepFun";
-    if (n.includes("hunyuan")) return "Tencent";
-    if (n.includes("kling")) return "Kuaishou";
-    if (n.includes("runway")) return "Runway";
-    if (n.includes("reve-")) return "Reve";
-    if (n.includes("hidream")) return "HiDream";
-    return "Other";
-}
+// lmarena.ai / arena.ai sit behind a Cloudflare bot check, so scraping the site no longer works.
+// The official Hugging Face dataset publishes the same leaderboards as structured data.
+const DATASET = "lmarena-ai/leaderboard-dataset";
+const ROWS_URL = "https://datasets-server.huggingface.co/rows";
+const TOP_N = 10;
 
-// Preferred tab order; anything the page adds later is appended after these.
-const CATEGORY_ORDER = [
-    "text",
-    "code-webdev",
-    "code-image-to-webdev",
-    "vision",
-    "document",
-    "search",
-    "text-to-image",
-    "image-edit",
-    "text-to-video",
-    "image-to-video",
-    "video-edit",
+// key = widget tab key (also used for the arena.ai link), config = HF dataset config
+const CATEGORIES = [
+    { key: "text", label: "Text", config: "text" },
+    { key: "webdev", label: "WebDev", config: "webdev" },
+    { key: "vision", label: "Vision", config: "vision" },
+    { key: "document", label: "Document", config: "document" },
+    { key: "text-to-image", label: "Txt→Img", config: "text_to_image" },
+    { key: "image-edit", label: "Img Edit", config: "image_edit" },
+    { key: "search", label: "Search", config: "search" },
+    { key: "text-to-video", label: "Txt→Vid", config: "text_to_video" },
+    { key: "image-to-video", label: "Img→Vid", config: "image_to_video" },
+    { key: "video-edit", label: "Vid Edit", config: "video_edit" },
 ];
 
-// Shorter tab labels where the page's own label is too long for the card.
-const SHORT_LABELS: Record<string, string> = {
-    "code-webdev": "WebDev",
-    "code-image-to-webdev": "Img→Web",
-    "text-to-image": "Txt→Img",
-    "image-edit": "Img Edit",
-    "text-to-video": "Txt→Vid",
-    "image-to-video": "Img→Vid",
-    "video-edit": "Vid Edit",
-};
-
-/* -------------------------------------------------------------- scraping */
-
-// Each leaderboard section on the overview page renders as one H2 link, e.g.
-//   ## [Text 🏆Overall 1 claude-fable-5 1506±5 2 ... View all](https://lmarena.ai/leaderboard/text)
-const SECTION_RE =
-    /^## \[([^\n]*?)\]\((https:\/\/lmarena\.ai\/leaderboard[^)\n]*)\)\s*$/gm;
-
-// One ranked row: "<rank> <name> <score><uncertainty>". The name may contain
-// spaces, parens or bracket tags, and the score may run straight into it
-// ("gpt-image-2 (medium)1381±4"). Uncertainty is "±4" or "+16/-16".
-const ENTRY_RE =
-    /(\d{1,2})\s+(.+?)\s*(\d{3,4})\s*(?:±\s*(\d+(?:\.\d+)?)|\+\s*(\d+)\s*\/\s*-\s*\d+)/g;
-
-const MIN_SCORE = 500;
-const MAX_SCORE = 3000;
-const MODELS_PER_CATEGORY = 10;
-
-function parseSection(content: string): { models: LeaderboardModel[]; label: string } {
-    const models: LeaderboardModel[] = [];
-    let firstEntryIndex = content.length;
-
-    ENTRY_RE.lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = ENTRY_RE.exec(content)) !== null) {
-        const rank = parseInt(match[1], 10);
-        const name = match[2].trim();
-        const score = parseInt(match[3], 10);
-        const ci = match[4] ?? match[5];
-
-        // Rows are always a contiguous 1..10 run, so a rank that breaks the
-        // sequence is stray text that merely looks like a row - skip it.
-        if (rank !== models.length + 1) continue;
-        if (score < MIN_SCORE || score > MAX_SCORE) continue;
-        if (!name || name.length > 80 || !/[a-z]/i.test(name)) continue;
-
-        if (models.length === 0) firstEntryIndex = match.index;
-
-        models.push({
-            rank,
-            name,
-            creator: inferCreator(name),
-            score,
-            ci: ci !== undefined ? Math.round(parseFloat(ci)) : null,
-            context_window: null,
-            input_price: null,
-            output_price: null,
-        });
-
-        if (models.length >= MODELS_PER_CATEGORY) break;
-    }
-
-    // The label is whatever precedes the first row, minus the "🏆Overall"
-    // sub-leaderboard note the page appends to some sections.
-    const label = content.slice(0, firstEntryIndex).split("🏆")[0].trim();
-
-    return { models, label };
-}
-
-function keyFromUrl(url: string): string {
-    const slug = url
-        .replace(/^https:\/\/lmarena\.ai\/leaderboard\/?/, "")
-        .replace(/\/+$/, "");
-    return slug ? slug.replace(/\//g, "-") : "overall";
-}
-
-// Fetch the overview page as markdown via Jina Reader and parse every section.
-async function fetchArenaLeaderboards(): Promise<{
-    categories: Record<string, CategoryData>;
-    order: CategoryMeta[];
-}> {
-    const res = await fetch("https://r.jina.ai/https://lmarena.ai/leaderboard", {
-        headers: { Accept: "text/plain" },
-        cache: "no-store",
-    });
-    if (!res.ok) throw new Error(`Jina reader returned ${res.status}`);
-
-    const text = await res.text();
-    const categories: Record<string, CategoryData> = {};
-    const found: CategoryMeta[] = [];
-
-    SECTION_RE.lastIndex = 0;
-    let section: RegExpExecArray | null;
-
-    while ((section = SECTION_RE.exec(text)) !== null) {
-        const [, content, url] = section;
-        const { models, label } = parseSection(content);
-
-        // Sections with no ELO rows (e.g. Agent, scored as a win-rate
-        // percentage) are skipped so the ELO column stays meaningful.
-        if (models.length === 0) continue;
-
-        const key = keyFromUrl(url);
-        if (categories[key]) continue;
-
-        categories[key] = { models };
-        found.push({ key, label: SHORT_LABELS[key] || label || key, url });
-    }
-
-    const order = found.sort((a, b) => {
-        const ai = CATEGORY_ORDER.indexOf(a.key);
-        const bi = CATEGORY_ORDER.indexOf(b.key);
-        return (ai === -1 ? CATEGORY_ORDER.length : ai) - (bi === -1 ? CATEGORY_ORDER.length : bi);
-    });
-
-    return { categories, order };
-}
-
-/* ------------------------------------------------- OpenRouter enrichment */
-
-const EFFORT_SUFFIXES =
-    /-(max|xhigh|high|medium|low|minimal|thinking|reasoning|preview|latest|search|grounding|batch|free|chat|instruct|it)(?=-|$)/g;
-
-// Reduce an Arena display name or an OpenRouter id to a comparable slug:
-// "claude-opus-4-6-high" and "anthropic/claude-opus-4.6" both -> "claude-opus-4.6"
-function normalizeModelName(name: string): string {
-    let slug = name
-        .toLowerCase()
-        .replace(/\[[^\]]*\]/g, " ")   // bracket tags, e.g. [web-search]
-        .replace(/\([^)]*\)/g, " ")    // parenthetical notes, e.g. (medium)
-        .replace(/[^a-z0-9.]+/g, "-")
-        .replace(/^-+|-+$/g, "");
-
-    // Arena writes version numbers with dashes ("4-6"), OpenRouter with dots.
-    let previous: string;
-    do {
-        previous = slug;
-        slug = slug.replace(/(\d)-(\d)/g, "$1.$2");
-    } while (slug !== previous);
-
-    return slug
-        .replace(EFFORT_SUFFIXES, "")
-        .replace(/-\d{4,8}$/, "")      // dated snapshots, e.g. -0902, -20260811
-        .replace(/^-+|-+$/g, "");
-}
-
-function normalizeOpenRouterId(id: string): string {
-    const slug = id.replace(/^~/, "").split("/").pop() || "";
-    return normalizeModelName(slug.split(":")[0]);
-}
-
-interface OpenRouterModel {
-    id?: string;
-    context_length?: number;
-    pricing?: { prompt?: string; completion?: string };
-}
-
-// OpenRouter ids are "<vendor>/<model>", which beats guessing from the name.
-const VENDOR_NAMES: Record<string, string> = {
+// Dataset organization slugs → display names used by the widget's colour map
+const ORG_NAMES: Record<string, string> = {
     anthropic: "Anthropic",
     openai: "OpenAI",
     google: "Google",
-    "x-ai": "xAI",
+    xai: "xAI",
     deepseek: "DeepSeek",
-    "meta-llama": "Meta",
     meta: "Meta",
-    mistralai: "Mistral",
-    qwen: "Alibaba",
+    mistral: "Mistral",
     alibaba: "Alibaba",
     cohere: "Cohere",
     microsoft: "Microsoft",
-    "z-ai": "Zhipu",
+    zhipu: "Zhipu",
+    "z.ai": "Zhipu",
     baidu: "Baidu",
     amazon: "Amazon",
-    moonshotai: "Moonshot",
+    moonshot: "Moonshot",
     bytedance: "ByteDance",
     minimax: "MiniMax",
     nvidia: "NVIDIA",
     stepfun: "StepFun",
     tencent: "Tencent",
+    xiaomi: "Xiaomi",
 };
 
-function creatorFromOpenRouterId(id: string | undefined): string | null {
-    if (!id) return null;
-    const vendor = id.replace(/^~/, "").split("/")[0].toLowerCase();
-    return VENDOR_NAMES[vendor] || null;
+function creatorName(org: string | null | undefined): string {
+    if (!org) return "Other";
+    const key = org.toLowerCase();
+    return ORG_NAMES[key] ?? org.charAt(0).toUpperCase() + org.slice(1);
 }
 
-function perMillion(value: string | undefined): number | null {
-    if (value === undefined) return null;
-    const parsed = parseFloat(value);
-    if (!isFinite(parsed) || parsed < 0) return null;
-    // Round away float noise, e.g. 13.282724250000001
-    return Math.round(parsed * 1_000_000 * 10000) / 10000;
+function relativeDate(isoDate: string): string {
+    const published = new Date(`${isoDate}T00:00:00Z`).getTime();
+    if (Number.isNaN(published)) return "";
+    const days = Math.floor((Date.now() - published) / 86_400_000);
+    if (days <= 0) return "today";
+    if (days === 1) return "1 day ago";
+    if (days < 14) return `${days} days ago`;
+    return `${Math.floor(days / 7)} weeks ago`;
 }
 
+async function fetchRows(config: string): Promise<ArenaRow[]> {
+    // Ask for a few extra rows: the "overall" ranking comes first in each split,
+    // followed by sub-category rankings which we filter out.
+    const url = `${ROWS_URL}?dataset=${encodeURIComponent(DATASET)}&config=${config}&split=latest&offset=0&length=${TOP_N + 10}`;
+
+    // The datasets-server occasionally returns transient errors, so retry once
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const res = await fetch(url, { headers: { Accept: "application/json" }, next: { revalidate } });
+            if (res.ok) {
+                const json = await res.json();
+                if (Array.isArray(json.rows)) return json.rows.map((r: { row: ArenaRow }) => r.row);
+            }
+        } catch {
+            // fall through to retry
+        }
+    }
+    throw new Error(`Failed to fetch leaderboard rows for ${config}`);
+}
+
+async function fetchCategory(config: string): Promise<CategoryData> {
+    const rows = await fetchRows(config);
+    const models = rows
+        .filter((r) => r.category === "overall" && r.rank != null && r.rating != null)
+        .sort((a, b) => a.rank - b.rank)
+        .slice(0, TOP_N)
+        .map<LeaderboardModel>((r) => ({
+            rank: Math.round(r.rank),
+            name: r.model_name,
+            creator: creatorName(r.organization),
+            score: Math.round(r.rating),
+            votes: Math.round(r.vote_count ?? 0),
+            context_window: null,
+            input_price: null,
+            output_price: null,
+        }));
+
+    return { models, updated: rows[0] ? relativeDate(rows[0].leaderboard_publish_date) : "" };
+}
+
+async function fetchArenaLeaderboards(): Promise<Record<string, CategoryData>> {
+    const results = await Promise.allSettled(CATEGORIES.map((c) => fetchCategory(c.config)));
+
+    const categories: Record<string, CategoryData> = {};
+    results.forEach((result, i) => {
+        if (result.status === "fulfilled" && result.value.models.length > 0) {
+            categories[CATEGORIES[i].key] = result.value;
+        } else if (result.status === "rejected") {
+            console.error(result.reason);
+        }
+    });
+    return categories;
+}
+
+// "Claude Opus 5.5 (Max)" → "claude-opus-5.5"
+function slugify(name: string): string {
+    return name
+        .toLowerCase()
+        .replace(/\(.*?\)/g, "")
+        .trim()
+        .replace(/\s+/g, "-");
+}
+
+// Enrich models with live pricing and context from OpenRouter
 async function enrichAllWithOpenRouter(
     categories: Record<string, CategoryData>
 ): Promise<Record<string, CategoryData>> {
     try {
         const res = await fetch("https://openrouter.ai/api/v1/models", {
             headers: { Accept: "application/json" },
-            next: { revalidate: 3600 },
+            next: { revalidate },
         });
         if (!res.ok) return categories;
-
         const raw = await res.json();
-        if (!Array.isArray(raw?.data)) return categories;
+        if (!raw.data || !Array.isArray(raw.data)) return categories;
 
-        // Index base models only - ":batch"/":free" variants and "~" aliases
-        // duplicate a base entry with different pricing.
-        const bySlug = new Map<string, OpenRouterModel>();
-        for (const model of raw.data as OpenRouterModel[]) {
-            const id = model.id;
-            if (!id || id.startsWith("~") || id.includes(":")) continue;
-            const slug = normalizeOpenRouterId(id);
-            if (slug && !bySlug.has(slug)) bySlug.set(slug, model);
+        const bySlug = new Map<string, any>();
+        for (const or of raw.data) {
+            const slug = (or.id || "").toLowerCase().split("/").pop();
+            if (slug && !bySlug.has(slug)) bySlug.set(slug, or);
         }
 
-        // Exact match on the normalized slug only. Fuzzy prefix matching was
-        // tried and mostly produced wrong pairings ("gemini-3-pro-grounding"
-        // onto an image model), and a wrong price is worse than a blank one.
-        const findMatch = (name: string): OpenRouterModel | undefined => {
-            const slug = normalizeModelName(name);
-            return slug ? bySlug.get(slug) : undefined;
+        const enrichModel = (model: LeaderboardModel): LeaderboardModel => {
+            const orMatch = bySlug.get(slugify(model.name));
+            if (!orMatch) return model;
+            return {
+                ...model,
+                context_window: orMatch.context_length || null,
+                input_price: orMatch.pricing?.prompt ? parseFloat(orMatch.pricing.prompt) * 1_000_000 : null,
+                output_price: orMatch.pricing?.completion ? parseFloat(orMatch.pricing.completion) * 1_000_000 : null,
+            };
         };
 
         const enriched: Record<string, CategoryData> = {};
         for (const [key, data] of Object.entries(categories)) {
-            enriched[key] = {
-                models: data.models.map((model) => {
-                    const match = findMatch(model.name);
-                    if (!match) return model;
-                    return {
-                        ...model,
-                        creator: creatorFromOpenRouterId(match.id) || model.creator,
-                        context_window: match.context_length ?? null,
-                        input_price: perMillion(match.pricing?.prompt),
-                        output_price: perMillion(match.pricing?.completion),
-                    };
-                }),
-            };
+            enriched[key] = { ...data, models: data.models.map(enrichModel) };
         }
         return enriched;
     } catch (err) {
-        console.error("OpenRouter enrichment failed:", err);
+        console.error("OpenRouter enrichment failed", err);
         return categories;
     }
 }
 
-/* ------------------------------------------------------------------ route */
-
 export async function GET() {
     try {
-        const { categories, order } = await fetchArenaLeaderboards();
+        const categories = await fetchArenaLeaderboards();
 
-        if (order.length > 0) {
+        if (Object.keys(categories).length > 0) {
+            const enriched = await enrichAllWithOpenRouter(categories);
             return NextResponse.json({
-                categories: await enrichAllWithOpenRouter(categories),
-                categoryOrder: order,
-                source: "live-arena",
+                categories: enriched,
+                categoryOrder: CATEGORIES.filter((c) => c.key in enriched).map((c) => ({
+                    key: c.key,
+                    label: c.label,
+                })),
+                source: "arena-hf-dataset",
             });
         }
-
-        console.error("Arena leaderboard page parsed to zero categories");
     } catch (err) {
         console.error("Failed to fetch arena leaderboard:", err);
     }
@@ -347,3 +223,4 @@ export async function GET() {
         { status: 502 }
     );
 }
+    
